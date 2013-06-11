@@ -1,0 +1,140 @@
+#!/usr/bin/env python
+"""
+    mkpages
+    ~~~~~~~
+"""
+from bs4 import BeautifulSoup
+import re
+import shutil
+import subprocess
+import sys
+from os import path, walk, mkdir, makedirs
+
+if len(sys.argv) not in (3, 4):
+    print "usage: mkpages sourcedir outputdir [uriprefix]"
+    sys.exit(1)
+
+sourcedir = sys.argv[1]
+outputdir = sys.argv[2]
+
+uriprefix = sys.argv[3] if len(sys.argv) == 4 else ''
+
+if not path.isdir(sourcedir):
+    print "error: sourcedir must be a directory"
+    sys.exit(1)
+
+if path.exists(outputdir):
+    print "outputdir exists, remove it or pick directory name that doesn't exist"
+    sys.exit(1)
+
+templatefilename = path.join(sourcedir, 'template.html')
+if not path.exists(templatefilename):
+    print "error:", templatefilename, "does not exist"
+with open(templatefilename) as fd:
+    templatesource = fd.read()
+
+ignoredfiles = [
+    templatefilename
+]
+
+def addclass(element, classname):
+    if element is None:
+        return
+    if 'class' in element.attrs:
+        element['class'].append(classname)
+    else:
+        element['class'] = [classname]
+
+def mark_navitem(nav, uri):
+    for a in nav.find_all('a', href=uri):
+        addclass(a.find_parent('li'), 'selected')
+
+def mkhtml(src, dst):
+    print "produce html:", src, "->", dst
+    page = BeautifulSoup(templatesource)
+    with open(src) as fd:
+        content = BeautifulSoup(fd.read())
+    if content.commands:
+        commands = content.commands.extract()
+    else:
+        commands = None
+
+    page.head.contents.extend(content.head.contents)
+    page.section.contents.extend(content.body.contents)
+
+    uri = '/' + path.relpath(src, sourcedir)
+
+    # see every head.link
+    for link in page.find_all('link', href=re.compile(r"\.css$")):
+        link = link['href']
+        dirname = path.dirname(src)
+        if link.startswith('/'):
+            cssfilename = path.join(sourcedir, link[1:])
+        else:
+            cssfilename = path.join(dirname, link)
+        cssfiledst = getdst(cssfilename)
+        cssdirname = path.dirname(cssfiledst)
+        print cssdirname
+        if not path.isdir(cssdirname):
+            print "create directory:", cssdirname
+            makedirs(cssdirname)
+        sassfilesrc = cssfilename[:-len(".css")] + ".sass"
+        if path.exists(sassfilesrc):
+            print 'sass', sassfilesrc, '->', cssfiledst
+            subprocess.call(['sass', sassfilesrc+':'+cssfiledst])
+        scssfilesrc = cssfilename[:-len(".css")] + ".scss"
+        if path.exists(scssfilesrc):
+            scssfiledst = getdst(cssfilename)
+            print 'sass', scssfilesrc, '->', cssfiledst
+            subprocess.call(['sass', scssfilesrc+':'+cssfiledst])
+
+    # mark the page in navigation links
+    for nav in page.find_all("nav"):
+        mark_navitem(nav, uri)
+        if uri.endswith('index.html'):
+            mark_navitem(nav, path.dirname(uri))
+
+    # insert uriprefix into every link.
+    for tag in page.find_all(href=re.compile("^/")):
+        tag['href'] = uriprefix + tag.get('href')
+    for img in page.find_all('img', src=re.compile("^/")):
+        a['src']  = uriprefix + a.get('src')
+
+    # execute addclass commands in the document
+    if commands:
+        for command in commands.find_all('addclass'):
+            classname = command.get_text()
+            params = dict(command.attrs)
+            tagname = params.pop('tag', None)
+            for tag in page.find_all(tagname, attrs=params):
+                addclass(tag, classname)
+
+    with open(dst, 'w') as fd:
+        fd.write(str(page))
+
+def getdst(dirname):
+    dst = path.relpath(dirname, sourcedir)
+    if dst == '.':
+        return outputdir
+    else:
+        return path.join(outputdir, dst)
+
+for dirname, directories, files in walk(sourcedir):
+    dst = getdst(dirname)
+    print 'create directory:', dst
+    if not path.isdir(dst):
+        mkdir(dst)
+
+    for filename in files:
+        srcfile = path.join(dirname, filename)
+        dstfile = path.join(dst, filename)
+        if srcfile in ignoredfiles:
+            continue
+        elif srcfile.endswith('.html'):
+            mkhtml(srcfile, dstfile)
+        elif srcfile.endswith('.swp'):
+            print 'ignore swap file', srcfile
+            continue
+        else:
+            print 'copy file:', srcfile, '->', dstfile
+            shutil.copy(srcfile, dstfile)
