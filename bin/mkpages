@@ -97,8 +97,10 @@ def mkhtml(src, dst):
     # insert uriprefix into every link.
     for tag in page.find_all(href=re.compile("^/")):
         tag['href'] = uriprefix + tag.get('href')
+    for script in page.find_all('script', src=re.compile("^/")):
+        script['src']  = uriprefix + script.get('src')
     for img in page.find_all('img', src=re.compile("^/")):
-        a['src']  = uriprefix + a.get('src')
+        img['src']  = uriprefix + img.get('src')
 
     # execute addclass commands in the document
     if commands:
